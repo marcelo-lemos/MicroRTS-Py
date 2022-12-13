@@ -58,7 +58,7 @@ def parse_args():
         help='the highest sigma of the trueskill evaluation')
     parser.add_argument('--output-path', type=str, default=f"league.temp.csv",
         help='the output path of the leaderboard csv')
-    parser.add_argument('--model-type', type=str, default=f"ppo_gridnet_large", choices=["ppo_gridnet_large", "ppo_gridnet"],
+    parser.add_argument('--model-type', type=str, default=f"ppo_gridnet_large", choices=["ppo_gridnet_large", "ppo_gridnet", "ppo_gridnet_spp"],
         help='the output path of the leaderboard csv')
     parser.add_argument('--maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
         help="the maps to do trueskill evaluations")
@@ -87,6 +87,13 @@ if args.model_type == "ppo_gridnet_large":
     from ppo_gridnet_large import Agent, MicroRTSStatsRecorder
 
     from gym_microrts.envs.vec_env import MicroRTSBotVecEnv, MicroRTSGridModeVecEnv
+elif args.model_type == "ppo_gridnet_spp":
+    from ppo_gridnet_spp import Agent, MicroRTSStatsRecorder
+
+    from gym_microrts.envs.vec_env import MicroRTSBotVecEnv
+    from gym_microrts.envs.vec_env import (
+        MicroRTSGridModeSharedMemVecEnv as MicroRTSGridModeVecEnv,
+    )
 else:
     from ppo_gridnet import Agent, MicroRTSStatsRecorder
 
@@ -190,7 +197,11 @@ class Match:
                 map_paths=[map_path],
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
             )
-            self.agent = Agent(self.envs).to(self.device)
+            if args.model_type == "ppo_gridnet_spp":
+                N_CHANNELS = 27
+                self.agent = Agent(N_CHANNELS).to(self.device)
+            else:
+                self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
             self.agent.eval()
         elif mode == 1:
@@ -203,10 +214,18 @@ class Match:
                 map_paths=[map_path],
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
             )
-            self.agent = Agent(self.envs).to(self.device)
+            if args.model_type == "ppo_gridnet_spp":
+                N_CHANNELS = 27
+                self.agent = Agent(N_CHANNELS).to(self.device)
+            else:
+                self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
             self.agent.eval()
-            self.agent2 = Agent(self.envs).to(self.device)
+            if args.model_type == "ppo_gridnet_spp":
+                N_CHANNELS = 27
+                self.agent = Agent(N_CHANNELS).to(self.device)
+            else:
+                self.agent = Agent(self.envs).to(self.device)
             self.agent2.load_state_dict(torch.load(self.rl_ai2, map_location=self.device))
             self.agent2.eval()
         else:

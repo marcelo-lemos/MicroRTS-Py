@@ -3,6 +3,7 @@
 import argparse
 import os
 import random
+from statistics import mean
 import subprocess
 import time
 from distutils.util import strtobool
@@ -93,9 +94,9 @@ def parse_args():
         help='the number of models saved')
     parser.add_argument('--max-eval-workers', type=int, default=4,
         help='the maximum number of eval workers (skips evaluation when set to 0)')
-    parser.add_argument('--train-maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
+    parser.add_argument('--train-maps', nargs='+', default=["maps/24x24/basesWorkers24x24A.xml"],
         help='the list of maps used during training')
-    parser.add_argument('--eval-maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
+    parser.add_argument('--eval-maps', nargs='+', default=["maps/24x24/basesWorkers24x24A.xml"],
         help='the list of maps used during evaluation')
 
     args = parser.parse_args()
@@ -170,7 +171,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs, mapsize=16 * 16):
+    def __init__(self, envs, mapsize=24 * 24):
         super(Agent, self).__init__()
         self.mapsize = mapsize
         h, w, c = envs.observation_space.shape
@@ -192,7 +193,7 @@ class Agent(nn.Module):
         )
         self.critic = nn.Sequential(
             nn.Flatten(),
-            layer_init(nn.Linear(64 * 4 * 4, 128)),
+            layer_init(nn.Linear(64 * 6 * 6, 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, 1), std=1),
         )
@@ -365,7 +366,7 @@ if __name__ == "__main__":
         lr = lambda f: f * args.learning_rate
 
     # ALGO Logic: Storage for epoch data
-    mapsize = 16 * 16
+    mapsize = 24 * 24
     action_space_shape = (mapsize, len(envs.action_plane_space.nvec))
     invalid_action_shape = (mapsize, envs.action_plane_space.nvec.sum())
 
@@ -560,6 +561,69 @@ if __name__ == "__main__":
             writer.add_scalar("debug/pg_stop_iter", i_epoch_pi, global_step)
         writer.add_scalar("charts/sps", int(global_step / (time.time() - start_time)), global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
+
+    # EVALUATION
+
+    for map_id in args.eval_maps:
+        for adversary in ["coacAI", "randomBiasedAI", "lightRushAI", "workerRushAI"]:
+            if adversary == "coacAI":
+                adv = microrts_ai.coacAI
+            elif adversary == "randomBiasedAI":
+                adv = microrts_ai.randomBiasedAI
+            elif adversary == "lightRushAI":
+                adv = microrts_ai.lightRushAI
+            elif adversary == "workerRushAI":
+                adv = microrts_ai.workerRushAI
+            else:
+                adv = None
+                
+            envs = MicroRTSGridModeVecEnv(
+                num_selfplay_envs=0,
+                num_bot_envs=args.num_bot_envs,
+                partial_obs=args.partial_obs,
+                max_steps=2000,
+                render_theme=2,
+                ai2s=[adv for _ in range(args.num_bot_envs)],
+                map_paths=[map_id],
+                reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
+                cycle_maps=[map_id],
+            )
+            envs = MicroRTSStatsRecorder(envs, args.gamma)
+            envs = VecMonitor(envs)
+            if args.capture_video:
+                envs = VecVideoRecorder(
+                    envs, f"videos/{experiment_name}", record_video_trigger=lambda x: x % 100000 == 0, video_length=2000
+                )
+            assert isinstance(envs.action_space, MultiDiscrete), "only MultiDiscrete action space is supported"
+
+            game_results = []
+
+            NUM_MATCHES = 100
+            next_obs = torch.Tensor(envs.reset()).to(device)
+            while len(game_results) < NUM_MATCHES:
+                # ALGO LOGIC: put action logic here
+                with torch.no_grad():
+                    mask = torch.tensor(envs.get_action_mask()).to(device)
+                    action, _, _, _, _ = agent.get_action_and_value(
+                        next_obs, envs=envs, invalid_action_masks=mask, device=device
+                    )
+                try:
+                    next_obs, rs, ds, infos = envs.step(action.cpu().numpy().reshape(envs.num_envs, -1))
+                    next_obs = torch.Tensor(next_obs).to(device)
+                except Exception as e:
+                    e.printStackTrace()
+                    raise
+
+                for idx, info in enumerate(infos):
+                    if "episode" in info.keys():
+                        game_results += [info["microrts_stats"]["WinLossRewardFunction"]]
+                        if len(game_results) >= NUM_MATCHES:
+                            break
+
+            writer.add_scalar(f"evaluation/{map_id}/{adversary}/score", mean(game_results), global_step)
+            writer.add_scalar(f"evaluation/{map_id}/{adversary}/wins", game_results.count(1), global_step)
+            writer.add_scalar(f"evaluation/{map_id}/{adversary}/draws", game_results.count(0), global_step)
+            writer.add_scalar(f"evaluation/{map_id}/{adversary}/losses", game_results.count(-1), global_step)
 
     if eval_executor is not None:
         # shutdown pool of threads but make sure we finished scheduled evaluations
