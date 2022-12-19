@@ -102,6 +102,7 @@ def parse_args():
         help='the list of maps used during evaluation')
     parser.add_argument('--total-cycles', type=int, default=1)
     parser.add_argument('--random-maps', action=argparse.BooleanOptionalAction, type=bool)
+    parser.add_argument('--spp-layers', nargs='+', type=int, default=[4])
 
     args = parser.parse_args()
     if not args.seed:
@@ -273,7 +274,7 @@ class SpatialPyramidPooling(PyramidPooling):
 
 
 class Agent(nn.Module):
-    def __init__(self, n_channels):
+    def __init__(self, n_channels, spp_layers):
         super(Agent, self).__init__()
         self.encoder = nn.Sequential(
             Transpose((0, 3, 1, 2)),
@@ -291,9 +292,11 @@ class Agent(nn.Module):
             layer_init(nn.ConvTranspose2d(32, 78, 3, stride=2, padding=1, output_padding=1)),
             Transpose((0, 2, 3, 1)),
         )
+
+        spp_output_size = sum([layer*layer for layer in spp_layers])
         self.critic = nn.Sequential(
-            SpatialPyramidPooling([4]),
-            layer_init(nn.Linear(64*(16), 128)),
+            SpatialPyramidPooling(spp_layers),
+            layer_init(nn.Linear(64*(spp_output_size), 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, 1), std=1),
         )
@@ -435,7 +438,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     N_CHANNELS = 27
-    agent = Agent(N_CHANNELS).to(device)
+    agent = Agent(N_CHANNELS, args.spp_layers).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     if args.anneal_lr:
         # https://github.com/openai/baselines/blob/ea25b9e8b234e6ee1bca43083f8f3cf974143998/baselines/ppo2/defaults.py#L20
