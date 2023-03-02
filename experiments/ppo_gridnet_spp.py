@@ -666,6 +666,7 @@ if __name__ == "__main__":
                 torch.save(agent.state_dict(), f"models/{experiment_name}/{global_step}.pt")
                 if args.prod_mode:
                     wandb.save(f"models/{experiment_name}/agent.pt", base_path=f"models/{experiment_name}", policy="now")
+                    wandb.save(f"models/{experiment_name}/{global_step}.pt", base_path=f"models/{experiment_name}", policy="now")
                 if eval_executor is not None:
                     future = eval_executor.submit(
                         run_evaluation,
